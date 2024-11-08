@@ -1,0 +1,104 @@
+import numpy as np
+import tensorflow as tf
+
+# Define scoring parameters
+MATCH_SCORE = 1
+MISMATCH_PENALTY = -1
+GAP_PENALTY = -2
+
+# Function to calculate match or mismatch score
+def match_score(a, b):
+    return MATCH_SCORE if a == b else MISMATCH_PENALTY
+
+# Wavefront alignment algorithm
+def wavefront_alignment(seq1, seq2):
+    seq1 = seq1.decode('utf-8')
+    seq2 = seq2.decode('utf-8')
+
+    len_seq1 = len(seq1)
+    len_seq2 = len(seq2)
+
+    # Initialize DP matrix with negative infinity values
+    dp = np.full((len_seq1 + 1, len_seq2 + 1), -np.inf)
+
+    # Initialize the first cell to zero
+    dp[0, 0] = 0
+
+    # Fill the first row and first column with gap penalties
+    for i in range(1, len_seq1 + 1):
+        dp[i][0] = i * GAP_PENALTY
+    for j in range(1, len_seq2 + 1):
+        dp[0][j] = j * GAP_PENALTY
+
+    # Fill the DP matrix based on wavefront distances
+    for d in range(1, len_seq1 + len_seq2 + 1):
+        for i in range(max(1, d - len_seq2), min(len_seq1 + 1, d + 1)):
+            j = d - i
+            if j >= 1 and j <= len_seq2:
+                match = dp[i - 1][j - 1] + match_score(seq1[i - 1], seq2[j - 1])
+                delete = dp[i - 1][j] + GAP_PENALTY
+                insert = dp[i][j - 1] + GAP_PENALTY
+                dp[i][j] = max(match, delete, insert)
+
+    # Traceback to find optimal alignment
+    alignment_seq1 = ""
+    alignment_seq2 = ""
+    i, j = len_seq1, len_seq2
+
+    while i > 0 and j > 0:
+        current_score = dp[i][j]
+        if current_score == dp[i - 1][j - 1] + match_score(seq1[i - 1], seq2[j - 1]):
+            alignment_seq1 = seq1[i - 1] + alignment_seq1
+            alignment_seq2 = seq2[j - 1] + alignment_seq2
+            i -= 1
+            j -= 1
+        elif current_score == dp[i - 1][j] + GAP_PENALTY:
+            alignment_seq1 = seq1[i - 1] + alignment_seq1
+            alignment_seq2 = "-" + alignment_seq2
+            i -= 1
+        else:
+            alignment_seq1 = "-" + alignment_seq1
+            alignment_seq2 = seq2[j - 1] + alignment_seq2
+            j -= 1
+
+    # Add remaining gaps
+    while i > 0:
+        alignment_seq1 = seq1[i - 1] + alignment_seq1
+        alignment_seq2 = "-" + alignment_seq2
+        i -= 1
+    while j > 0:
+        alignment_seq1 = "-" + alignment_seq1
+        alignment_seq2 = seq2[j - 1] + alignment_seq2
+        j -= 1
+
+    return alignment_seq1.encode('utf-8'), alignment_seq2.encode('utf-8'), dp[len_seq1][len_seq2]
+
+# Convert sequences to TensorFlow datasets
+def create_tf_dataset(sequence_pairs):
+    dataset = tf.data.Dataset.from_tensor_slices(sequence_pairs)
+    return dataset
+
+# Function to wrap wavefront alignment for TensorFlow
+def tf_wavefront_alignment(seq1, seq2):
+    result = tf.numpy_function(wavefront_alignment, [seq1, seq2], [tf.string, tf.string, tf.float64])
+    return result
+
+# Example usage with multiple sequence pairs
+sequence_pairs = [
+    ("GATTACA", "GCATGCU"),
+    ("AGTACGCA", "TATGC"),
+    ("GATTACA", "GATTACA"),
+]
+
+# Create TensorFlow dataset
+tf_dataset = create_tf_dataset(sequence_pairs)
+
+# Parallelize alignment using TensorFlow
+tf_dataset = tf_dataset.map(lambda x: tf_wavefront_alignment(x[0], x[1]))
+
+for alignment in tf_dataset:
+    alignment_seq1, alignment_seq2, score = alignment
+    print("Optimal alignment:")
+    print(alignment_seq1.numpy().decode("utf-8"))
+    print(alignment_seq2.numpy().decode("utf-8"))
+    print("Alignment score:", score.numpy())
